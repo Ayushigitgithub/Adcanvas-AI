@@ -7,15 +7,11 @@ const { model } = require("./geminiClient");
 const path = require("path");
 
 const app = express();
-
-// ✅ Use platform port when deployed (Render/Railway/etc.)
 const PORT = process.env.PORT || 5001;
 
-// ✅ JSON limit (prevents huge payload crashes)
 app.use(express.json({ limit: "1mb" }));
 
-// ✅ CORS: allow your frontend domains (comma-separated)
-// Example: FRONTEND_ORIGIN=http://localhost:3000,https://yourapp.vercel.app
+// ✅ CORS
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -24,11 +20,8 @@ const allowedOrigins = (process.env.FRONTEND_ORIGIN || "")
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow curl/postman/no-origin
       if (!origin) return cb(null, true);
-      // allow all if not configured (hackathon fallback)
       if (allowedOrigins.length === 0) return cb(null, true);
-      // enforce list
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`), false);
     },
@@ -42,7 +35,6 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 /** ---------- helpers ---------- **/
-
 function stripCodeFences(s) {
   let text = String(s || "").trim();
   if (text.startsWith("```")) {
@@ -50,7 +42,6 @@ function stripCodeFences(s) {
   }
   return text;
 }
-
 function extractFirstJsonObject(text) {
   const s = stripCodeFences(text);
   const start = s.indexOf("{");
@@ -58,17 +49,14 @@ function extractFirstJsonObject(text) {
   if (start === -1 || end === -1 || end <= start) return null;
   return s.slice(start, end + 1);
 }
-
 function normalizeWhitespace(s) {
   return String(s || "").replace(/\s+/g, " ").trim();
 }
-
 function clampWords(s, maxWords) {
   const words = String(s || "").trim().split(/\s+/).filter(Boolean);
   if (words.length <= maxWords) return String(s || "").trim();
   return words.slice(0, maxWords).join(" ").trim();
 }
-
 function isBadTescoClaim(str) {
   const t = (str || "").toLowerCase();
   const banned = [
@@ -99,7 +87,6 @@ function isBadTescoClaim(str) {
   ];
   return banned.some((w) => t.includes(w));
 }
-
 function pickBadgeFallback({ objective }) {
   const o = (objective || "").toLowerCase();
   if (o.includes("awareness")) return "New in";
@@ -107,10 +94,8 @@ function pickBadgeFallback({ objective }) {
   if (o.includes("conversion")) return "Browse range";
   return "New in";
 }
-
 function pickLayoutForPreset({ sizePreset }) {
   const s = String(sizePreset || "").toLowerCase();
-  // ✅ treat all vertical/story/9x16 formats as stacked
   if (
     s.includes("story") ||
     s.includes("portrait") ||
@@ -125,10 +110,18 @@ function pickLayoutForPreset({ sizePreset }) {
 
 /** ---------- main AI route ---------- **/
 app.post("/api/generate-copy", async (req, res) => {
-  // ✅ Don’t log the full body (can be huge). Log only key metadata.
   const meta = req.body?.campaign
-    ? { platform: req.body.campaign?.platform, objective: req.body.campaign?.objective, sizePreset: req.body.creative?.sizePreset }
-    : { platform: req.body?.platform, objective: req.body?.objective, sizePreset: req.body?.sizePreset };
+    ? {
+        platform: req.body.campaign?.platform,
+        objective: req.body.campaign?.objective,
+        sizePreset: req.body.creative?.sizePreset,
+      }
+    : {
+        platform: req.body?.platform,
+        objective: req.body?.objective,
+        sizePreset: req.body?.sizePreset,
+      };
+
   console.log("🔵 POST /api/generate-copy meta:", meta);
 
   let platform,
@@ -295,7 +288,6 @@ Output JSON only. No markdown. No extra text.
       alerts.push("Layout normalized to a supported preset.");
     }
 
-    // ✅ Force stacked for ALL vertical/story-like presets
     if (pickLayoutForPreset({ sizePreset }) === "center-packshot") {
       outLayout = "center-packshot";
     }
@@ -318,11 +310,12 @@ Output JSON only. No markdown. No extra text.
   }
 });
 
-// ✅ Optional: Serve React build if you deploy as a single service
-// (Only if your React build output is in ./build)
+// ✅ Serve React build on same service (single deploy)
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "build")));
-  app.get("*", (req, res) => {
+
+  // ✅ Express 5-safe catch-all (also works on Express 4)
+  app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, "build", "index.html"));
   });
 }
