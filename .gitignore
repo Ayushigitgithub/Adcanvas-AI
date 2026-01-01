@@ -1,6 +1,4 @@
-# =========================
-# Logs
-# =========================
+
 logs/
 *.log
 npm-debug.log*
@@ -9,30 +7,22 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# =========================
-# Diagnostic reports
-# =========================
+
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-# =========================
-# Runtime data
-# =========================
+
 pids/
 *.pid
 *.seed
 *.pid.lock
 
-# =========================
-# Coverage / testing
-# =========================
+
 coverage/
 *.lcov
 .nyc_output/
 lib-cov/
 
-# =========================
-# Dependency directories
-# =========================
+
 node_modules/
 jspm_packages/
 web_modules/
@@ -48,9 +38,7 @@ web_modules/
 !.yarn/sdks
 !.yarn/versions
 
-# =========================
-# Builds / outputs
-# =========================
+
 build/
 dist/
 build/Release/
@@ -63,9 +51,7 @@ out/
 **/.vitepress/cache
 .docusaurus/
 
-# =========================
-# Caches
-# =========================
+
 .cache/
 .parcel-cache/
 .npm/
@@ -73,9 +59,7 @@ out/
 .stylelintcache
 .tern-port
 
-# =========================
-# Env / secrets
-# =========================
+
 .env
 .env.*
 !.env.example
@@ -84,18 +68,14 @@ out/
 .env.test.local
 .env.production.local
 
-# =========================
-# OS / editor junk
-# =========================
+
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 .vscode-test/
 
-# =========================
-# Misc
-# =========================
+
 *.tsbuildinfo
 *.tgz
 .lock-wscript
