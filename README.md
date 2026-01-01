@@ -53,10 +53,9 @@ This project helps users quickly generate ad creatives in multiple platform size
 
 ## 🔐 Environment Variables (IMPORTANT)
 This project uses a **Gemini API key** in the backend.
-You must create a local `.env` file (NOT uploaded to GitHub).
 
 ### 1) Create `.env` from example
-In the **project root** (same level as `server.js`), run:
+In the **project root** (same folder as `server.js`), create `.env` from `.env.example`:
 
 #### Windows PowerShell
 ```bash
