@@ -137,3 +137,18 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# CRA local env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+#react build
+build/
