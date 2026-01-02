@@ -74,14 +74,14 @@ app.use("/api", (req, res, next) => {
 // ✅ Rate limit only the expensive Gemini endpoint(s)
 const generateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // 20 requests per IP per 15 min (tweak if you want)
+  max: 5,                   // ✅ only 5 generates per IP per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Rate limit hit. Try again later." },
+  message: { error: "Generate limit reached. Try again in 15 minutes." },
 });
 
-// Apply limiter to Gemini route
 app.use("/api/generate-copy", generateLimiter);
+
 
 /** ---------- helpers ---------- **/
 function stripCodeFences(s) {
