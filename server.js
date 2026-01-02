@@ -3,35 +3,85 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const path = require("path");
 const fs = require("fs");
 const { model } = require("./geminiClient");
 
 const app = express();
+
+// ✅ IMPORTANT when behind Netlify/Railway proxies (rate-limit + IP detection)
+app.set("trust proxy", 1);
+
 const PORT = process.env.PORT || 5001;
 
 // JSON limit
 app.use(express.json({ limit: "1mb" }));
 
-// CORS
+/**
+ * FRONTEND_ORIGIN should be set in Railway Variables like:
+ * FRONTEND_ORIGIN=https://storied-licorice-5a97b4.netlify.app
+ * (comma-separated if multiple)
+ */
+
+// CORS allowlist
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// ✅ CORS (browser safety)
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
+      // If no allowlist is configured, allow (useful during setup)
       if (allowedOrigins.length === 0) return cb(null, true);
+
+      // Some non-browser requests have no Origin. We allow /health separately anyway,
+      // but for general CORS, we won't hard-block here.
+      if (!origin) return cb(null, true);
+
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS blocked for origin: ${origin}`), false);
     },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
   })
 );
 
 // ✅ Health check (Railway can ping this)
 app.get("/health", (req, res) => res.json({ ok: true }));
+
+// ✅ Extra protection: block direct hits to /api unless coming from your Netlify site
+// This reduces random abuse that could consume Gemini quota.
+app.use("/api", (req, res, next) => {
+  // If you didn't set FRONTEND_ORIGIN yet, don't block (so you don't lock yourself out)
+  if (allowedOrigins.length === 0) return next();
+
+  const origin = req.get("origin") || "";
+  const referer = req.get("referer") || "";
+
+  const ok =
+    (origin && allowedOrigins.includes(origin)) ||
+    allowedOrigins.some((o) => referer.startsWith(o + "/"));
+
+  if (!ok) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+});
+
+// ✅ Rate limit only the expensive Gemini endpoint(s)
+const generateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // 20 requests per IP per 15 min (tweak if you want)
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Rate limit hit. Try again later." },
+});
+
+// Apply limiter to Gemini route
+app.use("/api/generate-copy", generateLimiter);
 
 /** ---------- helpers ---------- **/
 function stripCodeFences(s) {
@@ -236,7 +286,10 @@ Output JSON only. No markdown. No extra text.
 
     const alerts = Array.isArray(ai?.alerts) ? ai.alerts.slice(0, 6) : [];
 
-    let outHeadline = clampWords(normalizeWhitespace(ai?.headline || headline || ""), 8);
+    let outHeadline = clampWords(
+      normalizeWhitespace(ai?.headline || headline || ""),
+      8
+    );
     let outSubcopy = normalizeWhitespace(ai?.subcopy || subcopy || "");
 
     const allowedCTAs = new Set(["View details", "Learn more", "See more", "Browse range"]);
