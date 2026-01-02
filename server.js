@@ -1,17 +1,19 @@
-// server.js (project root, NOT in src)
+// server.js (project root)
 require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const { model } = require("./geminiClient");
 const path = require("path");
+const fs = require("fs");
+const { model } = require("./geminiClient");
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// JSON limit
 app.use(express.json({ limit: "1mb" }));
 
-// ✅ CORS
+// CORS
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -28,10 +30,7 @@ app.use(
   })
 );
 
-// Health-checks
-app.get("/", (req, res) => {
-  res.send("AdCanvas AI backend is running with Gemini.");
-});
+// ✅ Health check (Railway can ping this)
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 /** ---------- helpers ---------- **/
@@ -224,25 +223,20 @@ Output JSON only. No markdown. No extra text.
 
     const result = await model.generateContent(prompt);
     let raw = result?.response?.text?.() || "";
-    console.log("✅ Raw Gemini text (trimmed):", String(raw).slice(0, 800));
-
     const jsonText = extractFirstJsonObject(raw);
-    let ai = null;
 
+    let ai = null;
     if (jsonText) {
       try {
         ai = JSON.parse(jsonText);
       } catch (e) {
-        console.error("❌ JSON parse failed:", e);
         ai = null;
       }
     }
 
     const alerts = Array.isArray(ai?.alerts) ? ai.alerts.slice(0, 6) : [];
 
-    let outHeadline = normalizeWhitespace(ai?.headline || headline || "");
-    outHeadline = clampWords(outHeadline, 8);
-
+    let outHeadline = clampWords(normalizeWhitespace(ai?.headline || headline || ""), 8);
     let outSubcopy = normalizeWhitespace(ai?.subcopy || subcopy || "");
 
     const allowedCTAs = new Set(["View details", "Learn more", "See more", "Browse range"]);
@@ -302,7 +296,6 @@ Output JSON only. No markdown. No extra text.
       alerts,
     });
   } catch (err) {
-    console.error("❌ Gemini error:", err?.message || err);
     res.status(500).json({
       error: "Gemini request failed",
       detail: err?.message || String(err),
@@ -310,16 +303,29 @@ Output JSON only. No markdown. No extra text.
   }
 });
 
-// ✅ Serve React build on same service (single deploy)
-if (process.env.NODE_ENV === "production") {
-  app.use(express.static(path.join(__dirname, "build")));
+/** ---------- React serving (single service deploy) ---------- **/
+const buildPath = path.join(__dirname, "build");
+const hasBuild = fs.existsSync(path.join(buildPath, "index.html"));
 
-  // ✅ Express 5-safe catch-all (also works on Express 4)
-  app.get(/.*/, (req, res) => {
-    res.sendFile(path.join(__dirname, "build", "index.html"));
+if (process.env.NODE_ENV === "production" && hasBuild) {
+  app.use(express.static(buildPath));
+
+  // Serve React at /
+  app.get("/", (req, res) => {
+    res.sendFile(path.join(buildPath, "index.html"));
+  });
+
+  // Serve React for any non-API route
+  app.get(/^\/(?!api).*/, (req, res) => {
+    res.sendFile(path.join(buildPath, "index.html"));
+  });
+} else {
+  // Dev / or if build missing
+  app.get("/", (req, res) => {
+    res.send("AdCanvas AI backend is running with Gemini. (React build not served here)");
   });
 }
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`AdCanvas AI backend listening on port ${PORT}`);
 });

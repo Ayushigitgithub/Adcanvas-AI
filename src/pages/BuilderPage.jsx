@@ -869,7 +869,8 @@ export default function BuilderPage({ campaign, onCampaignChange, onNavigate }) 
         },
       };
 
-      const res = await axios.post("http://localhost:5001/api/generate-copy", payload);
+     const res = await axios.post("/api/generate-copy", payload);
+
 
       const data = res.data || {};
       const h = data.headline ?? data.title ?? data.primaryText;
