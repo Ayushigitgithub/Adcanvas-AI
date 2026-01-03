@@ -9,156 +9,104 @@ const fs = require("fs");
 const { model } = require("./geminiClient");
 
 const app = express();
-
-// ✅ IMPORTANT when behind Netlify/Railway proxies (rate-limit + IP detection)
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
 
 const PORT = process.env.PORT || 5001;
 
-// JSON limit
 app.use(express.json({ limit: "1mb" }));
 
+/** ---------------- Origin normalization ---------------- **/
+function normalizeUrl(u) {
+  if (!u) return "";
+  return String(u).trim().replace(/\/+$/, ""); // remove trailing slashes
+}
+
 /**
- * FRONTEND_ORIGIN should be set in Railway Variables like:
+ * Railway Variables:
  * FRONTEND_ORIGIN=https://storied-licorice-5a97b4.netlify.app
  * (comma-separated if multiple)
  */
-
-// CORS allowlist
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "")
   .split(",")
-  .map((s) => s.trim())
+  .map(normalizeUrl)
   .filter(Boolean);
 
-// ✅ CORS (browser safety)
+function isAllowedOrigin(origin) {
+  const o = normalizeUrl(origin);
+  return !!o && allowedOrigins.includes(o);
+}
+
+function isAllowedReferer(referer) {
+  const r = String(referer || "").trim();
+  if (!r) return false;
+
+  // allow if referer starts with allowedOrigin + "/"
+  return allowedOrigins.some((o) => r.startsWith(o + "/"));
+}
+
+/** ---------------- CORS (no throwing) ---------------- **/
 app.use(
   cors({
     origin: (origin, cb) => {
-      // If no allowlist is configured, allow (useful during setup)
+      // During initial setup, if allowlist missing, allow
       if (allowedOrigins.length === 0) return cb(null, true);
 
-      // Some non-browser requests have no Origin. We allow /health separately anyway,
-      // but for general CORS, we won't hard-block here.
-      if (!origin) return cb(null, true);
+      // Block non-browser/no-origin calls for API safety
+      // (Health still works because it doesn't require CORS)
+      if (!origin) return cb(null, false);
 
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked for origin: ${origin}`), false);
+      if (isAllowedOrigin(origin)) return cb(null, true);
+
+      console.log("🚫 CORS blocked:", origin, "allowed:", allowedOrigins);
+      return cb(null, false); // IMPORTANT: do not throw Error (prevents 500 HTML)
     },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
-// ✅ Health check (Railway can ping this)
+app.options("*", cors());
+
+/** ---------------- Health ---------------- **/
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// ✅ Extra protection: block direct hits to /api unless coming from your Netlify site
-// This reduces random abuse that could consume Gemini quota.
+/** ---------------- API gate (blocks Postman/bots) ---------------- **/
 app.use("/api", (req, res, next) => {
-  // If you didn't set FRONTEND_ORIGIN yet, don't block (so you don't lock yourself out)
+  if (req.method === "OPTIONS") return next();
+
+  // Don't lock yourself out if allowlist isn't configured yet
   if (allowedOrigins.length === 0) return next();
 
   const origin = req.get("origin") || "";
   const referer = req.get("referer") || "";
 
+  // Hard block no-origin + no-referer (Postman/curl/bots)
+  if (!origin && !referer) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   const ok =
-    (origin && allowedOrigins.includes(origin)) ||
-    allowedOrigins.some((o) => referer.startsWith(o + "/"));
+    (origin && isAllowedOrigin(origin)) ||
+    (referer && isAllowedReferer(referer));
 
   if (!ok) {
     return res.status(403).json({ error: "Forbidden" });
   }
+
   next();
 });
 
-// ✅ Rate limit only the expensive Gemini endpoint(s)
+/** ---------------- Rate limit (Gemini endpoint only) ---------------- **/
 const generateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,                   // ✅ only 5 generates per IP per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Generate limit reached. Try again in 15 minutes." },
 });
 
-app.use("/api/generate-copy", generateLimiter);
-
-
-/** ---------- helpers ---------- **/
-function stripCodeFences(s) {
-  let text = String(s || "").trim();
-  if (text.startsWith("```")) {
-    text = text.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "").trim();
-  }
-  return text;
-}
-function extractFirstJsonObject(text) {
-  const s = stripCodeFences(text);
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  return s.slice(start, end + 1);
-}
-function normalizeWhitespace(s) {
-  return String(s || "").replace(/\s+/g, " ").trim();
-}
-function clampWords(s, maxWords) {
-  const words = String(s || "").trim().split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) return String(s || "").trim();
-  return words.slice(0, maxWords).join(" ").trim();
-}
-function isBadTescoClaim(str) {
-  const t = (str || "").toLowerCase();
-  const banned = [
-    "% off",
-    "percent off",
-    "sale",
-    "discount",
-    "deal",
-    "offer ends",
-    "limited offer",
-    "₹",
-    "$",
-    "€",
-    "£",
-    "cashback",
-    "free gift",
-    "win",
-    "prize",
-    "contest",
-    "giveaway",
-    "donate",
-    "donation",
-    "charity",
-    "sustainable",
-    "eco-friendly",
-    "carbon",
-    "green",
-  ];
-  return banned.some((w) => t.includes(w));
-}
-function pickBadgeFallback({ objective }) {
-  const o = (objective || "").toLowerCase();
-  if (o.includes("awareness")) return "New in";
-  if (o.includes("consideration")) return "Explore the range";
-  if (o.includes("conversion")) return "Browse range";
-  return "New in";
-}
-function pickLayoutForPreset({ sizePreset }) {
-  const s = String(sizePreset || "").toLowerCase();
-  if (
-    s.includes("story") ||
-    s.includes("portrait") ||
-    s.includes("9x16") ||
-    s.includes("reels") ||
-    s.includes("shorts")
-  ) {
-    return "center-packshot";
-  }
-  return "left-packshot";
-}
-
-/** ---------- main AI route ---------- **/
-app.post("/api/generate-copy", async (req, res) => {
+app.post("/api/generate-copy", generateLimiter, async (req, res) => {
   const meta = req.body?.campaign
     ? {
         platform: req.body.campaign?.platform,
@@ -228,6 +176,74 @@ app.post("/api/generate-copy", async (req, res) => {
     legalLine = req.body.legalLine;
   }
 
+  /** ---------- helpers ---------- **/
+  function stripCodeFences(s) {
+    let text = String(s || "").trim();
+    if (text.startsWith("```")) {
+      text = text.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "").trim();
+    }
+    return text;
+  }
+  function extractFirstJsonObject(text) {
+    const s = stripCodeFences(text);
+    const start = s.indexOf("{");
+    const end = s.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+    return s.slice(start, end + 1);
+  }
+  function normalizeWhitespace(s) {
+    return String(s || "").replace(/\s+/g, " ").trim();
+  }
+  function clampWords(s, maxWords) {
+    const words = String(s || "").trim().split(/\s+/).filter(Boolean);
+    if (words.length <= maxWords) return String(s || "").trim();
+    return words.slice(0, maxWords).join(" ").trim();
+  }
+  function isBadTescoClaim(str) {
+    const t = (str || "").toLowerCase();
+    const banned = [
+      "% off",
+      "percent off",
+      "sale",
+      "discount",
+      "deal",
+      "offer ends",
+      "limited offer",
+      "₹",
+      "$",
+      "€",
+      "£",
+      "cashback",
+      "free gift",
+      "win",
+      "prize",
+      "contest",
+      "giveaway",
+      "donate",
+      "donation",
+      "charity",
+      "sustainable",
+      "eco-friendly",
+      "carbon",
+      "green",
+    ];
+    return banned.some((w) => t.includes(w));
+  }
+  function pickBadgeFallback({ objective }) {
+    const o = (objective || "").toLowerCase();
+    if (o.includes("awareness")) return "New in";
+    if (o.includes("consideration")) return "Explore the range";
+    if (o.includes("conversion")) return "Browse range";
+    return "New in";
+  }
+  function pickLayoutForPreset({ sizePreset }) {
+    const s = String(sizePreset || "").toLowerCase();
+    if (s.includes("story") || s.includes("portrait") || s.includes("9x16") || s.includes("reels") || s.includes("shorts")) {
+      return "center-packshot";
+    }
+    return "left-packshot";
+  }
+
   try {
     const prompt = `
 You are an ad copy assistant for Tesco Retail Media self-serve creatives.
@@ -272,24 +288,17 @@ Output JSON only. No markdown. No extra text.
     `.trim();
 
     const result = await model.generateContent(prompt);
-    let raw = result?.response?.text?.() || "";
+    const raw = result?.response?.text?.() || "";
     const jsonText = extractFirstJsonObject(raw);
 
     let ai = null;
     if (jsonText) {
-      try {
-        ai = JSON.parse(jsonText);
-      } catch (e) {
-        ai = null;
-      }
+      try { ai = JSON.parse(jsonText); } catch (_) { ai = null; }
     }
 
     const alerts = Array.isArray(ai?.alerts) ? ai.alerts.slice(0, 6) : [];
 
-    let outHeadline = clampWords(
-      normalizeWhitespace(ai?.headline || headline || ""),
-      8
-    );
+    let outHeadline = clampWords(normalizeWhitespace(ai?.headline || headline || ""), 8);
     let outSubcopy = normalizeWhitespace(ai?.subcopy || subcopy || "");
 
     const allowedCTAs = new Set(["View details", "Learn more", "See more", "Browse range"]);
@@ -334,12 +343,9 @@ Output JSON only. No markdown. No extra text.
       outLayout = pickLayoutForPreset({ sizePreset });
       alerts.push("Layout normalized to a supported preset.");
     }
+    if (pickLayoutForPreset({ sizePreset }) === "center-packshot") outLayout = "center-packshot";
 
-    if (pickLayoutForPreset({ sizePreset }) === "center-packshot") {
-      outLayout = "center-packshot";
-    }
-
-    res.json({
+    return res.json({
       headline: outHeadline,
       subcopy: outSubcopy,
       cta: outCTA,
@@ -349,7 +355,8 @@ Output JSON only. No markdown. No extra text.
       alerts,
     });
   } catch (err) {
-    res.status(500).json({
+    console.error("❌ Gemini request failed:", err);
+    return res.status(500).json({
       error: "Gemini request failed",
       detail: err?.message || String(err),
     });
@@ -363,21 +370,25 @@ const hasBuild = fs.existsSync(path.join(buildPath, "index.html"));
 if (process.env.NODE_ENV === "production" && hasBuild) {
   app.use(express.static(buildPath));
 
-  // Serve React at /
   app.get("/", (req, res) => {
     res.sendFile(path.join(buildPath, "index.html"));
   });
 
-  // Serve React for any non-API route
   app.get(/^\/(?!api).*/, (req, res) => {
     res.sendFile(path.join(buildPath, "index.html"));
   });
 } else {
-  // Dev / or if build missing
   app.get("/", (req, res) => {
     res.send("AdCanvas AI backend is running with Gemini. (React build not served here)");
   });
 }
+
+/** Always return JSON on errors */
+app.use((err, req, res, next) => {
+  console.error("🔥 Unhandled error:", err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "Internal Server Error", detail: err?.message || String(err) });
+});
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`AdCanvas AI backend listening on port ${PORT}`);
