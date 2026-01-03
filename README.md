@@ -60,3 +60,6 @@ In the **project root** (same folder as `server.js`), create `.env` from `.env.e
 #### Windows PowerShell
 ```bash
 copy .env.example .env
+
+##### Demo Video (2–4 min)
+Loom Link ( https://www.loom.com/share/68fe0a55fd5c4341a5ef14e68d455a07 )
